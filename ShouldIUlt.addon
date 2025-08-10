@@ -13,3 +13,5 @@ ShouldIUlt.xml
 ShouldIUlt.lua
 Defaults.lua
 Debug.lua
+Settings.lua
+UI.lua
