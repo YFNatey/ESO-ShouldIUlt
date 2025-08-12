@@ -10,75 +10,17 @@ ShouldIUlt.scanThrottle = 250
 ShouldIUlt.lastUltCheck = 0
 ShouldIUlt.ultCheckThrottle = 500
 
+ShouldIUlt.offBalanceImmunityTimer = nil
+ShouldIUlt.offBalanceImmunityEndTime = 0
+ShouldIUlt.offBalanceImmunityDuration = 15000
 
-function ShouldIUlt:GetDisplayBuffs()
-    if ShouldIUlt.savedVars.simulationMode then
-        return self:GetSimulatedBuffs()
-    else
-        local allBuffs = {}
-
-
-        for abilityId, buffInfo in pairs(self.buffData) do
-            if not (ShouldIUlt.savedVars.hidePermanentBuffs and buffInfo.isPermanent) then
-                allBuffs[abilityId] = buffInfo
-            end
-        end
+ShouldIUlt.cachedSimulatedBuffs = nil
+ShouldIUlt.simulationCacheTime = 0
 
 
-        if (ShouldIUlt.savedVars.trackAbyssalInk or ShouldIUlt.savedVars.trackBossDebuffs) and self.bossDebuffData then
-            for abilityId, debuffInfo in pairs(self.bossDebuffData) do
-                if not (ShouldIUlt.savedVars.hidePermanentBuffs and debuffInfo.isPermanent) then
-                    allBuffs[abilityId] = debuffInfo
-                end
-            end
-        end
-
-        return allBuffs
-    end
-end
-
-function ShouldIUlt:GetTrackedBuffs()
-    local trackedBuffs = {}
-
-    -- Iterate through the buff type map
-    for buffType, data in pairs(self.buffTypeMap) do
-        if ShouldIUlt.savedVars[data.setting] then
-            -- Search for all IDs that match target buff names
-            for category, categoryData in pairs(self.buffDatabase) do
-                if category == "bossDebuffs" then
-                    for subcat, buffs in pairs(categoryData) do
-                        for abilityId, name in pairs(buffs) do
-                            if (data.major and name == data.major) or (data.minor and name == data.minor) then
-                                table.insert(trackedBuffs, abilityId)
-                            end
-                        end
-                    end
-                else
-                    -- Handle direct categories
-                    for abilityId, name in pairs(categoryData) do
-                        if type(abilityId) == "number" then
-                            if (data.major and name == data.major) or (data.minor and name == data.minor) then
-                                table.insert(trackedBuffs, abilityId)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    return trackedBuffs
-end
-
-function ShouldIUlt:IsTrackedBuff(abilityId)
-    local trackedBuffs = ShouldIUlt:GetTrackedBuffs()
-    for _, trackedId in ipairs(trackedBuffs) do
-        if trackedId == abilityId then
-            return true
-        end
-    end
-    return false
-end
+---=============================================================================
+-- Scan Boss Debuffs and player Buffs
+--=============================================================================
 
 function ShouldIUlt:ScanCurrentBuffs()
     self.buffData = {}
@@ -180,15 +122,11 @@ end
 
 function ShouldIUlt:ScanTargetDebuffs()
     local currentTime = GetGameTimeMilliseconds()
-
-
     if (currentTime - self.lastScanTime) < self.scanThrottle then
         return
     end
     self.lastScanTime = currentTime
-
     local targetTag = "reticleover"
-
     if not DoesUnitExist(targetTag) then
         if self.bossDebuffData then
             for abilityId in pairs(self.bossDebuffData) do
@@ -199,22 +137,18 @@ function ShouldIUlt:ScanTargetDebuffs()
     end
 
     local targetName = GetUnitName(targetTag)
-
     if not IsUnitAttackable(targetTag) then
         return
     end
-
 
     if not self.bossDebuffData then
         self.bossDebuffData = {}
     end
 
-
     local trackedBuffIds = {}
     for _, buffId in ipairs(self:GetTrackedBuffs()) do
         trackedBuffIds[buffId] = true
     end
-
 
     local existingDebuffs = {}
     for abilityId in pairs(self.bossDebuffData) do
@@ -222,30 +156,24 @@ function ShouldIUlt:ScanTargetDebuffs()
     end
 
     local numberOfBuffs = GetNumBuffs(targetTag)
-
-
     local maxBuffsToCheck = math.min(numberOfBuffs, 50)
 
     for i = 0, maxBuffsToCheck do
         local buffName, timeStarted, timeEnding, buffSlot, stackCount, iconFilename, buffType, effectType, abilityType, statusEffectType, abilityId, canClickOff, castByPlayer =
             GetUnitBuffInfo(targetTag, i)
-
-
         if buffName and abilityId and trackedBuffIds[abilityId] then
             existingDebuffs[abilityId] = nil
-
             local startTimeMs = timeStarted * 1000
             local endTimeMs = timeEnding * 1000
             local durationMs = endTimeMs - startTimeMs
-
             local isPermanent = (timeStarted == timeEnding) or (durationMs <= 0)
+
             if isPermanent then
                 durationMs = 0
                 endTimeMs = 0
             end
 
             local isOffBalanceImmunity = (abilityId == 134599)
-
             self.bossDebuffData[abilityId] = {
                 name = buffName,
                 iconName = iconFilename,
@@ -263,78 +191,167 @@ function ShouldIUlt:ScanTargetDebuffs()
         end
     end
 
-    -- Remove debuffs that are no longer present
+    -- Remove expired debuffs
     for abilityId in pairs(existingDebuffs) do
         self.bossDebuffData[abilityId] = nil
     end
 end
 
-function ShouldIUlt:OnBossEffectChanged(changeType, effectSlot, effectName, unitTag, beginTime, endTime, stackCount,
-                                        iconName, buffType, effectType, abilityType, statusEffectType, unitName, unitId,
-                                        abilityId,
-                                        sourceType)
-    if not self:IsTrackedBuff(abilityId) then
-        return
-    end
+function ShouldIUlt:GetDisplayBuffs()
+    if ShouldIUlt.savedVars.simulationMode then
+        return self:GetSimulatedBuffs()
+    else
+        local allBuffs = {}
 
-    if changeType == EFFECT_RESULT_GAINED or changeType == EFFECT_RESULT_UPDATED then
-        if not self.bossDebuffData then
-            self.bossDebuffData = {}
+        -- Player buffs
+        for abilityId, buffInfo in pairs(self.buffData) do
+            if not (ShouldIUlt.savedVars.hidePermanentBuffs and buffInfo.isPermanent) then
+                allBuffs[abilityId] = buffInfo
+            end
         end
 
-        local startTimeMs = beginTime * 1000
-        local endTimeMs = endTime * 1000
-        local durationMs = endTimeMs - startTimeMs
-
-        local isPermanent = (beginTime == endTime) or (durationMs <= 0) or (durationMs > 3600000)
-        if isPermanent then
-            durationMs = 0
-            endTimeMs = 0
-        end
-
-        local bossName = GetUnitName(unitTag)
-        local isOffBalanceImmunity = (abilityId == 134599)
-
-        self.bossDebuffData[abilityId] = {
-            name = effectName,
-            iconName = iconName,
-            endTime = endTimeMs,
-            startTime = startTimeMs,
-            stackCount = stackCount or 1,
-            duration = durationMs,
-            slot = effectSlot,
-            unitTag = unitTag,
-            bossName = bossName,
-            isBossDebuff = true,
-            isOffBalanceImmunity = isOffBalanceImmunity,
-            isPermanent = isPermanent
-        }
-
-        self:UpdateUI()
-    elseif changeType == EFFECT_RESULT_FADED then
+        -- Boss Debuffs
         if self.bossDebuffData then
-            self.bossDebuffData[abilityId] = nil
+            local shouldShowBossDebuffs = ShouldIUlt.savedVars.trackAbyssalInk or
+                ShouldIUlt.savedVars.trackVulnerability or
+                ShouldIUlt.savedVars.trackOffBalance or
+                ShouldIUlt.savedVars.trackBrittle or
+                ShouldIUlt.savedVars.trackBreach
+            if shouldShowBossDebuffs then
+                for abilityId, debuffInfo in pairs(self.bossDebuffData) do
+                    if not (ShouldIUlt.savedVars.hidePermanentBuffs and debuffInfo.isPermanent) then
+                        allBuffs[abilityId] = debuffInfo
+                    end
+                end
+            end
         end
-        self:UpdateUI()
+
+        -- Off-balance immunity timer
+        if self:IsOffBalanceImmunityActive() and ShouldIUlt.savedVars.showOffBalanceImmunity and ShouldIUlt.savedVars.trackOffBalance then
+            local hasRealOffBalance = false
+            for abilityId, buffInfo in pairs(allBuffs) do
+                if self:IsOffBalanceBuff(abilityId) then
+                    hasRealOffBalance = true
+                    break
+                end
+            end
+
+            if not hasRealOffBalance then
+                -- Fake ability ID for the immunity timer
+                local immunityId = 999999
+                allBuffs[immunityId] = {
+                    name = "Off-Balance",
+                    iconName = "/esoui/art/icons/ability_debuff_offbalance.dds",
+                    endTime = self.offBalanceImmunityEndTime,
+                    startTime = self.offBalanceImmunityEndTime - self.offBalanceImmunityDuration,
+                    stackCount = 1,
+                    duration = self.offBalanceImmunityDuration,
+                    slot = 999,
+                    isOffBalanceImmunity = true,
+                    isPermanent = false,
+                    isImmunityTimer = true
+                }
+            end
+        end
+
+        return allBuffs
     end
 end
 
-function ShouldIUlt:OnTargetChanged()
-    if not ShouldIUlt.savedVars.enableBossScanning then
-        return
-    end
+function ShouldIUlt:GetTrackedBuffs()
+    local trackedBuffs = {}
 
-    if self.targetChangeTimer then
-        zo_callLater(function() end, 0)
-    end
-
-    self.targetChangeTimer = zo_callLater(function()
-        self.targetChangeTimer = nil
-
-        if ShouldIUlt.savedVars.trackBossDebuffs or ShouldIUlt.savedVars.trackAbyssalInk then
-            ShouldIUlt:ScanTargetDebuffs()
+    -- Search for all IDs that match target buff names
+    for buffType, data in pairs(self.buffTypeMap) do
+        if ShouldIUlt.savedVars[data.setting] then
+            for category, categoryData in pairs(self.buffDatabase) do
+                if category == "bossDebuffs" then
+                    for subcat, buffs in pairs(categoryData) do
+                        for abilityId, name in pairs(buffs) do
+                            if (data.major and name == data.major) or (data.minor and name == data.minor) then
+                                table.insert(trackedBuffs, abilityId)
+                            end
+                        end
+                    end
+                else
+                    -- Handle direct categories
+                    for abilityId, name in pairs(categoryData) do
+                        if type(abilityId) == "number" then
+                            if (data.major and name == data.major) or (data.minor and name == data.minor) then
+                                table.insert(trackedBuffs, abilityId)
+                            end
+                        end
+                    end
+                end
+            end
         end
-    end, 200)
+    end
+
+    return trackedBuffs
+end
+
+function ShouldIUlt:IsTrackedBuff(abilityId)
+    local trackedBuffs = ShouldIUlt:GetTrackedBuffs()
+    for _, trackedId in ipairs(trackedBuffs) do
+        if trackedId == abilityId then
+            return true
+        end
+    end
+    return false
+end
+
+---=============================================================================
+-- Off-Balance and Immunity Timer
+--=============================================================================
+function ShouldIUlt:IsOffBalanceBuff(abilityId)
+    local buffName = self:FindBuffNameInDatabase(abilityId)
+    return buffName == "Off-Balance"
+end
+
+-- Start timer
+function ShouldIUlt:StartOBImmunityTimer()
+    local currentTime = GetGameTimeMilliseconds()
+    self.offBalanceImmunityEndTime = currentTime + self.offBalanceImmunityDuration
+
+    -- Clear any existing timer
+    if self.offBalanceImmunityTimer then
+        EVENT_MANAGER:UnregisterForUpdate(self.offBalanceImmunityTimer)
+        self.offBalanceImmunityTimer = nil
+    end
+
+    -- Create a unique timer name
+    local timerName = ADDON_NAME .. "OffBalanceImmunity" .. tostring(currentTime)
+    self.offBalanceImmunityTimer = timerName
+    EVENT_MANAGER:RegisterForUpdate(timerName, 100, function()
+        local now = GetGameTimeMilliseconds()
+        if now >= self.offBalanceImmunityEndTime then
+            self:ClearOffBalanceImmunityTimer()
+            self:UpdateUI()
+        end
+    end)
+    self:UpdateUI()
+end
+
+-- Timer update
+function ShouldIUlt:UpdateOBImmunityTimer()
+    if not self:IsOffBalanceImmunityActive() then
+        return 0
+    end
+    return self.offBalanceImmunityEndTime - GetGameTimeMilliseconds()
+end
+
+-- Clear Timer
+function ShouldIUlt:ClearOffBalanceImmunityTimer()
+    if self.offBalanceImmunityTimer then
+        EVENT_MANAGER:UnregisterForUpdate(self.offBalanceImmunityTimer)
+        self.offBalanceImmunityTimer = nil
+    end
+    self.offBalanceImmunityEndTime = 0
+end
+
+-- Check for Immunity
+function ShouldIUlt:IsOffBalanceImmunityActive()
+    return self.offBalanceImmunityEndTime > 0 and GetGameTimeMilliseconds() < self.offBalanceImmunityEndTime
 end
 
 ---=============================================================================
@@ -350,7 +367,6 @@ function ShouldIUlt:CheckUltConditions()
         self.lastUltResult = false
         return false
     end
-
     local requiredBuffs = {}
 
     -- Vulnerability
@@ -640,11 +656,98 @@ function ShouldIUlt:OnEffectChanged(changeType, effectSlot, effectName, unitTag,
             isPermanent = isPermanent
         }
 
+        -- If off-balance is gained, clear any immunity timer
+        if self:IsOffBalanceBuff(abilityId) then
+            self:ClearOffBalanceImmunityTimer()
+        end
+
         self:UpdateUI()
     elseif changeType == EFFECT_RESULT_FADED then
+        -- Check if this is an off-balance effect that just faded
+        if self:IsOffBalanceBuff(abilityId) and ShouldIUlt.savedVars.showOffBalanceImmunity then
+            self:StartOBImmunityTimer()
+        end
+
         self.buffData[abilityId] = nil
         self:UpdateUI()
     end
+end
+
+function ShouldIUlt:OnBossEffectChanged(changeType, effectSlot, effectName, unitTag, beginTime, endTime, stackCount,
+                                        iconName, buffType, effectType, abilityType, statusEffectType, unitName, unitId,
+                                        abilityId, sourceType)
+    if not self:IsTrackedBuff(abilityId) then
+        return
+    end
+
+    if changeType == EFFECT_RESULT_GAINED or changeType == EFFECT_RESULT_UPDATED then
+        if not self.bossDebuffData then
+            self.bossDebuffData = {}
+        end
+
+        local startTimeMs = beginTime * 1000
+        local endTimeMs = endTime * 1000
+        local durationMs = endTimeMs - startTimeMs
+
+        local isPermanent = (beginTime == endTime) or (durationMs <= 0) or (durationMs > 3600000)
+        if isPermanent then
+            durationMs = 0
+            endTimeMs = 0
+        end
+
+        local bossName = GetUnitName(unitTag)
+        local isOffBalanceImmunity = (abilityId == 134599)
+
+        self.bossDebuffData[abilityId] = {
+            name = effectName,
+            iconName = iconName,
+            endTime = endTimeMs,
+            startTime = startTimeMs,
+            stackCount = stackCount or 1,
+            duration = durationMs,
+            slot = effectSlot,
+            unitTag = unitTag,
+            bossName = bossName,
+            isBossDebuff = true,
+            isOffBalanceImmunity = isOffBalanceImmunity,
+            isPermanent = isPermanent
+        }
+
+        -- If off-balance is gained, clear any immunity timer
+        if self:IsOffBalanceBuff(abilityId) then
+            self:ClearOffBalanceImmunityTimer()
+        end
+
+        self:UpdateUI()
+    elseif changeType == EFFECT_RESULT_FADED then
+        -- Check if this is an off-balance effect that just faded
+        if self:IsOffBalanceBuff(abilityId) and ShouldIUlt.savedVars.showOffBalanceImmunity then
+            self:StartOBImmunityTimer()
+        end
+
+        if self.bossDebuffData then
+            self.bossDebuffData[abilityId] = nil
+        end
+        self:UpdateUI()
+    end
+end
+
+function ShouldIUlt:OnTargetChanged()
+    if not ShouldIUlt.savedVars.enableBossScanning then
+        return
+    end
+
+    if self.targetChangeTimer then
+        zo_callLater(function() end, 0)
+    end
+
+    self.targetChangeTimer = zo_callLater(function()
+        self.targetChangeTimer = nil
+
+        if ShouldIUlt.savedVars.trackBossDebuffs or ShouldIUlt.savedVars.trackAbyssalInk then
+            ShouldIUlt:ScanTargetDebuffs()
+        end
+    end, 200)
 end
 
 function ShouldIUlt:StartTimerUpdates()
@@ -657,14 +760,6 @@ function ShouldIUlt:StartTimerUpdates()
             ShouldIUlt:ShowUltMessage()
         end
     end)
-end
-
-function ShouldIUlt:Cleanup()
-    EVENT_MANAGER:UnregisterForUpdate(ADDON_NAME .. "TimerUpdate")
-    self.buffData = {}
-    if self.bossDebuffData then
-        self.bossDebuffData = {}
-    end
 end
 
 ---=============================================================================
@@ -716,17 +811,36 @@ function ShouldIUlt:UpdateUI()
     local iconSize = ShouldIUlt.savedVars.iconSize
     local spacing = ShouldIUlt.savedVars.iconSpacing or 5
     local adjustedSpacing = math.max(1, math.floor(iconSize * 0.1))
+    local layoutDirection = ShouldIUlt.savedVars.layoutDirection or "horizontal"
 
+    -- Calculate layout dimensions based on direction
+    local maxIcons = 14
+    local cols, rows
 
-    for i = 1, 14 do
+    if layoutDirection == "horizontal" then
+        cols = ShouldIUlt.savedVars.maxIconsPerRow or 7
+        rows = math.ceil(maxIcons / cols)
+    else -- vertical
+        rows = ShouldIUlt.savedVars.maxIconsPerColumn or 7
+        cols = math.ceil(maxIcons / rows)
+    end
+
+    -- Position icons based on layout
+    for i = 1, maxIcons do
         local buffIcon = container:GetNamedChild("BuffIcon" .. i)
         if buffIcon then
             buffIcon:SetHidden(true)
             buffIcon:SetDimensions(iconSize, iconSize)
 
+            local row, col
+            if layoutDirection == "horizontal" then
+                row = math.floor((i - 1) / cols)
+                col = (i - 1) % cols
+            else -- vertical
+                col = math.floor((i - 1) / rows)
+                row = (i - 1) % rows
+            end
 
-            local row = math.floor((i - 1) / 7)
-            local col = (i - 1) % 7
             local x = col * (iconSize + adjustedSpacing)
             local y = row * (iconSize + adjustedSpacing)
 
@@ -734,8 +848,8 @@ function ShouldIUlt:UpdateUI()
             buffIcon:SetAnchor(TOPLEFT, container, TOPLEFT, x, y)
         end
     end
-    local cols = 7
-    local rows = math.ceil(14 / cols)
+
+    -- Update container dimensions
     local containerWidth = (cols * iconSize) + ((cols - 1) * adjustedSpacing)
     local containerHeight = (rows * iconSize) + ((rows - 1) * adjustedSpacing)
     container:SetDimensions(containerWidth, containerHeight)
@@ -752,23 +866,20 @@ function ShouldIUlt:UpdateUI()
             local timerLabel = buffIcon:GetNamedChild("Timer")
             local stackLabel = buffIcon:GetNamedChild("Stack")
 
-
-
             if iconControl and buffInfo.iconName then
                 iconControl:SetTexture(buffInfo.iconName)
                 buffIcon:SetHidden(false)
 
-
-                if buffInfo.isOffBalanceImmunity then
-                    iconControl:SetColor(1, 0.02, 0, 1)
-                elseif buffInfo.name == "Off-Balance" then
-                    iconControl:SetColor(0, 0.7, 0.5, 1)
+                -- Color the icon based on buff type
+                if buffInfo.isOffBalanceImmunity or buffInfo.isImmunityTimer then
+                    iconControl:SetColor(1, 0.02, 0, 1)  -- Red for immunity
+                elseif buffInfo.name == "Off-Balance" and not buffInfo.isImmunityTimer then
+                    iconControl:SetColor(0, 0.7, 0.5, 1) -- Green for active off-balance
                 else
-                    iconControl:SetColor(1, 1, 1, 1)
+                    iconControl:SetColor(1, 1, 1, 1)     -- Normal color
                 end
 
-
-
+                -- Timer display
                 if timerLabel and ShouldIUlt.savedVars.showTimer then
                     if buffInfo.isPermanent then
                         timerLabel:SetText("")
@@ -789,8 +900,6 @@ function ShouldIUlt:UpdateUI()
                     if timerLabel then timerLabel:SetHidden(true) end
                 end
 
-
-
                 -- Stack count display
                 if stackLabel and ShouldIUlt.savedVars.showStacks and buffInfo.stackCount > 1 then
                     stackLabel:SetText(tostring(buffInfo.stackCount))
@@ -800,13 +909,22 @@ function ShouldIUlt:UpdateUI()
                 end
 
                 index = index + 1
-                if index > 14 then break end
+                if index > maxIcons then break end
             end
         end
     end
 
     if self:CheckUltConditions() then
         self:ShowUltMessage()
+    end
+end
+
+function ShouldIUlt:Cleanup()
+    EVENT_MANAGER:UnregisterForUpdate(ADDON_NAME .. "TimerUpdate")
+    self:ClearOffBalanceImmunityTimer()
+    self.buffData = {}
+    if self.bossDebuffData then
+        self.bossDebuffData = {}
     end
 end
 
@@ -847,9 +965,6 @@ function ShouldIUlt:UpdateTimersOnly()
                     end
                 end
             end
-
-
-
             index = index + 1
             if index > 14 then break end
         end
@@ -865,90 +980,119 @@ end
 --=============================================================================
 ShouldIUlt.lastUltNotification = nil
 function ShouldIUlt:GetSimulatedBuffs()
-    local simulatedBuffs = {}
     local currentTime = GetGameTimeMilliseconds()
-    local buffsToSimulate = {}
 
-    if ShouldIUlt.savedVars.simulateAllTracked then
+    if not self.cachedSimulatedBuffs or (currentTime - self.simulationCacheTime) > 5000 then
+        local simulatedBuffs = {}
+        local buffsToSimulate = {}
+
         -- Simulate all buffs in the database
-        for category, categoryData in pairs(self.buffDatabase) do
-            if category == "bossDebuffs" then
-                for subcat, buffs in pairs(categoryData) do
-                    for abilityId, name in pairs(buffs) do
-                        if not buffsToSimulate[name] then
+        if ShouldIUlt.savedVars.simulateAllTracked then
+            for category, categoryData in pairs(self.buffDatabase) do
+                if category == "bossDebuffs" then
+                    for subcat, buffs in pairs(categoryData) do
+                        for abilityId, name in pairs(buffs) do
+                            if not buffsToSimulate[name] then
+                                buffsToSimulate[name] = abilityId
+                            end
+                        end
+                    end
+                else
+                    for abilityId, name in pairs(categoryData) do
+                        if type(abilityId) == "number" and not buffsToSimulate[name] then
                             buffsToSimulate[name] = abilityId
                         end
                     end
                 end
-            else
-                for abilityId, name in pairs(categoryData) do
-                    if type(abilityId) == "number" and not buffsToSimulate[name] then
-                        buffsToSimulate[name] = abilityId
-                    end
+            end
+        else
+            -- Only simulate enabled buffs
+            for buffType, data in pairs(self.buffTypeMap) do
+                if ShouldIUlt.savedVars[data.setting] then
+                    if data.major then buffsToSimulate[data.major] = true end
+                    if data.minor then buffsToSimulate[data.minor] = true end
                 end
             end
-        end
-    else
-        -- Only simulate enabled buffs
-        for buffType, data in pairs(self.buffTypeMap) do
-            if ShouldIUlt.savedVars[data.setting] then
-                if data.major then buffsToSimulate[data.major] = true end
-                if data.minor then buffsToSimulate[data.minor] = true end
-            end
-        end
 
-        -- Find IDs for enabled buffs
-        local tempSimulate = {}
-        for category, categoryData in pairs(self.buffDatabase) do
-            if category == "bossDebuffs" then
-                for subcat, buffs in pairs(categoryData) do
-                    for abilityId, name in pairs(buffs) do
-                        if buffsToSimulate[name] and not tempSimulate[name] then
+            -- Find IDs for enabled buffs
+            local tempSimulate = {}
+            for category, categoryData in pairs(self.buffDatabase) do
+                if category == "bossDebuffs" then
+                    for subcat, buffs in pairs(categoryData) do
+                        for abilityId, name in pairs(buffs) do
+                            if buffsToSimulate[name] and not tempSimulate[name] then
+                                tempSimulate[name] = abilityId
+                            end
+                        end
+                    end
+                else
+                    for abilityId, name in pairs(categoryData) do
+                        if type(abilityId) == "number" and buffsToSimulate[name] and not tempSimulate[name] then
                             tempSimulate[name] = abilityId
                         end
                     end
                 end
+            end
+            buffsToSimulate = tempSimulate
+        end
+
+        local index = 1
+        for buffName, abilityId in pairs(buffsToSimulate) do
+            local baseDuration
+            if index <= 3 then
+                baseDuration = 5000
+            elseif index <= 6 then
+                baseDuration = 1500
             else
-                for abilityId, name in pairs(categoryData) do
-                    if type(abilityId) == "number" and buffsToSimulate[name] and not tempSimulate[name] then
-                        tempSimulate[name] = abilityId
-                    end
-                end
+                baseDuration = 6000
+            end
+
+            local isOffBalanceImmunity = (abilityId == 134599)
+            local isPermanent = (index % 7 == 0)
+
+            simulatedBuffs[abilityId] = {
+                name = buffName,
+                iconName = self:GetBuffIcon(buffName),
+                endTime = isPermanent and currentTime or (currentTime + baseDuration),
+                startTime = currentTime - 1000,
+                stackCount = (buffName == "Major Slayer") and 5 or 1,
+                duration = isPermanent and 0 or baseDuration,
+                slot = index,
+                simulated = true,
+                isOffBalanceImmunity = isOffBalanceImmunity,
+                isPermanent = isPermanent
+            }
+            index = index + 1
+        end
+
+        -- Cache the results
+        self.cachedSimulatedBuffs = simulatedBuffs
+        self.simulationCacheTime = currentTime
+    else
+        -- Update timestamps on cached buffs to keep timers working
+        for abilityId, buffInfo in pairs(self.cachedSimulatedBuffs) do
+            if not buffInfo.isPermanent then
+                local originalDuration = buffInfo.duration
+                buffInfo.startTime = currentTime - 1000
+                buffInfo.endTime = currentTime + originalDuration - 1000
             end
         end
-        buffsToSimulate = tempSimulate
     end
 
-    local index = 1
-    for buffName, abilityId in pairs(buffsToSimulate) do
-        local baseDuration
-        if index <= 3 then
-            baseDuration = 5000
-        elseif index <= 6 then
-            baseDuration = 1500
-        else
-            baseDuration = 6000
-        end
+    return self.cachedSimulatedBuffs
+end
 
-        local isOffBalanceImmunity = (abilityId == 134599)
-        local isPermanent = (index % 7 == 0)
+function ShouldIUlt:SetSimulationMode(value)
+    ShouldIUlt.savedVars.simulationMode = value
 
-        simulatedBuffs[abilityId] = {
-            name = buffName,
-            iconName = self:GetBuffIcon(buffName),
-            endTime = isPermanent and currentTime or (currentTime + baseDuration),
-            startTime = currentTime - 1000,
-            stackCount = (buffName == "Major Slayer") and 5 or 1,
-            duration = isPermanent and 0 or baseDuration,
-            slot = index,
-            simulated = true,
-            isOffBalanceImmunity = isOffBalanceImmunity,
-            isPermanent = isPermanent
-        }
-        index = index + 1
+    -- Clear cache when disabling simulation mode
+    if not value then
+        self.cachedSimulatedBuffs = nil
+        self.simulationCacheTime = 0
     end
 
-    return simulatedBuffs
+    ShouldIUlt:ScanCurrentBuffs()
+    ShouldIUlt:UpdateUI()
 end
 
 ---=============================================================================

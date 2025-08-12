@@ -44,6 +44,20 @@ function ShouldIUlt:CreateSettingsMenu()
         ShouldIUlt:CreateBuffToggleOption("offBalance", "Off-Balance",
             "|t48:48:/esoui/art/icons/ability_debuff_offbalance.dds|t",
             "|t48:48:/esoui/art/icons/ability_debuff_offbalance.dds|t"), -- Same icon for both
+        {
+            type = "checkbox",
+            name = " Off-Balance Immunity Timer",
+            tooltip = "Show a red off-balance icon for 15 seconds after off-balance expires",
+            getFunc = function() return ShouldIUlt.savedVars.showOffBalanceImmunity end,
+            setFunc = function(value)
+                ShouldIUlt.savedVars.showOffBalanceImmunity = value
+                if not value then
+                    ShouldIUlt:ClearOffBalanceImmunityTimer()
+                end
+                ShouldIUlt:UpdateUI()
+            end,
+            disabled = function() return not ShouldIUlt.savedVars.trackOffBalance end,
+        },
 
         ShouldIUlt:CreateBuffToggleOption("brittle", "Brittle",
             "|t48:48:/esoui/art/icons/ability_debuff_major_brittle.dds|t",
@@ -113,14 +127,27 @@ function ShouldIUlt:CreateSettingsMenu()
             name = "Display Settings",
         },
         {
+            type = "slider",
+            name = "Container Size",
+            tooltip = "1 = Vertical  14 = Horizontal ",
+            min = 1,
+            max = 14,
+            step = 1,
+            getFunc = function() return ShouldIUlt.savedVars.maxIconsPerRow or 7 end,
+            setFunc = function(value)
+                ShouldIUlt.savedVars.maxIconsPerRow = value
+                ShouldIUlt:UpdateUI()
+            end,
+            width = "half",
+            disabled = function() return ShouldIUlt.savedVars.layoutDirection == "vertical" end,
+        },
+        {
             type = "checkbox",
             name = "Test Display",
             tooltip = "Show simulated buffs instead of real ones (for testing UI layout)",
             getFunc = function() return ShouldIUlt.savedVars.simulationMode end,
             setFunc = function(value)
-                ShouldIUlt.savedVars.simulationMode = value
-                ShouldIUlt:ScanCurrentBuffs()
-                ShouldIUlt:UpdateUI()
+                ShouldIUlt:SetSimulationMode(value)
             end,
         },
         {

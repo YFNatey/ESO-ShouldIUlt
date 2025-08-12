@@ -40,7 +40,12 @@ ShouldIUlt.defaults = {
     simulationMode = false,
     simulateAllTracked = false,
     hidePermanentBuffs = false,
+    trackBossDebuffs = true,
+    layoutDirection = "horizontal",
+    maxIconsPerRow = 7,
+    maxIconsPerColumn = 7,
 
+    showOffBalanceImmunity = true,
     -- Should I Ult settings
     enableUltCheck = false,
     ultCheckMode = "any",
