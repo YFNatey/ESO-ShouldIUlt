@@ -34,8 +34,8 @@ function ShouldIUlt:CreateSettingsMenu()
             end,
         },
         {
-            type = "description",
-            text = "|cFF6B6BEnemy Debuffs|r",
+            type = "header",
+            name = "Enemy Debuffs",
         },
         ShouldIUlt:CreateBuffToggleOption("vulnerability", "Vulnerability",
             "|t48:48:/esoui/art/icons/ability_debuff_major_vulnerability.dds|t",
@@ -64,8 +64,8 @@ function ShouldIUlt:CreateSettingsMenu()
             "|t48:48:/esoui/art/icons/ability_debuff_minor_brittle.dds|t"),
 
         {
-            type = "description",
-            text = "|cFFD700Player Damage Buffs|r",
+            type = "header",
+            name = "Player Damage Buffs",
         },
 
         ShouldIUlt:CreateBuffToggleOption("slayer", "Slayer",
@@ -99,8 +99,8 @@ function ShouldIUlt:CreateSettingsMenu()
             { "Minor Savagery", "Minor Prophecy" }),
 
         {
-            type = "description",
-            text = "|cDDA0DDOther Buffs|r",
+            type = "header",
+            name = "Other Buffs",
         },
 
         ShouldIUlt:CreateBuffToggleOption("heroism", "Heroism",
@@ -259,8 +259,8 @@ function ShouldIUlt:CreateSettingsMenu()
 
         -- DAMAGE DEBUFFS SECTION
         {
-            type = "description",
-            text = "|cFF6B6BEnemy Debuffs|r",
+            type = "header",
+            name = "Enemy Debuffs",
         },
         {
             type = "checkbox",
@@ -298,11 +298,9 @@ function ShouldIUlt:CreateSettingsMenu()
             end,
             disabled = function() return not ShouldIUlt.savedVars.enableUltCheck end,
         },
-
-        -- PLAYER DAMAGE BUFFS SECTION
         {
-            type = "description",
-            text = "|cFFD700Player Damage Buffs|r",
+            type = "header",
+            name = "Player Damage Buffs",
         },
         {
             type = "checkbox",

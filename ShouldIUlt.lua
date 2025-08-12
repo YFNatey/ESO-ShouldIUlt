@@ -611,7 +611,6 @@ local function OnAddOnLoaded(event, addonName)
     end
 end
 
-
 EVENT_MANAGER:RegisterForEvent(ADDON_NAME, EVENT_ADD_ON_LOADED, OnAddOnLoaded)
 
 
