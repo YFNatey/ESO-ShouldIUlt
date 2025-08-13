@@ -29,6 +29,9 @@ ShouldIUlt.defaults = {
     iconSize = 50,
     showTimer = true,
     trackAbyssalInk = false,
+    staticContainer = false,
+    inactiveBuffOpacity = 0.3,
+    timerThreshold = 10.0,
 
     trackWeaponSpellDamage = false,
     trackWeaponSpellCrit = false,

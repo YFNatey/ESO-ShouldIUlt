@@ -912,10 +912,283 @@ function ShouldIUlt:UpdateUI()
             end
         end
     end
-
+    if ShouldIUlt.savedVars.staticContainer then
+        -- Static container mode - show slots for all tracked buffs
+        self:UpdateStaticContainer(displayBuffs)
+    else
+        -- Dynamic container mode - only show active buffs (original behavior)
+        self:UpdateDynamicContainer(displayBuffs)
+    end
     if self:CheckUltConditions() then
         self:ShowUltMessage()
     end
+end
+
+-- New function for static container mode
+function ShouldIUlt:UpdateStaticContainer(activeBuffs)
+    local container = BuffTrackerContainer
+    if not container then return end
+
+    -- Get all tracked buff types and create static slots
+    local staticSlots = self:GetStaticBuffSlots()
+    local inactiveOpacity = ShouldIUlt.savedVars.inactiveBuffOpacity or 0.3
+
+    local index = 1
+    for _, slotInfo in ipairs(staticSlots) do
+        local buffIcon = container:GetNamedChild("BuffIcon" .. index)
+        if buffIcon then
+            local iconControl = buffIcon:GetNamedChild("Icon")
+            local timerLabel = buffIcon:GetNamedChild("Timer")
+            local stackLabel = buffIcon:GetNamedChild("Stack")
+
+            if iconControl then
+                -- Set the icon for this buff type
+                iconControl:SetTexture(slotInfo.iconPath)
+                buffIcon:SetHidden(false)
+
+                -- Check if this buff is currently active
+                local isActive = false
+                local activeBuffInfo = nil
+
+                for abilityId, buffInfo in pairs(activeBuffs) do
+                    local buffName = self:FindBuffNameInDatabase(abilityId)
+                    if buffName == slotInfo.buffName then
+                        isActive = true
+                        activeBuffInfo = buffInfo
+                        break
+                    end
+                end
+
+                if isActive and activeBuffInfo then
+                    -- Buff is active - full opacity and special coloring
+                    buffIcon:SetAlpha(1.0)
+
+                    -- Color the icon based on buff type
+                    if activeBuffInfo.isOffBalanceImmunity or activeBuffInfo.isImmunityTimer then
+                        iconControl:SetColor(1, 0.02, 0, 1)  -- Red for immunity
+                    elseif activeBuffInfo.name == "Off-Balance" and not activeBuffInfo.isImmunityTimer then
+                        iconControl:SetColor(0, 0.7, 0.5, 1) -- Green for active off-balance
+                    else
+                        iconControl:SetColor(1, 1, 1, 1)     -- Normal color
+                    end
+
+                    -- Timer display
+                    if timerLabel and ShouldIUlt.savedVars.showTimer then
+                        if activeBuffInfo.isPermanent then
+                            timerLabel:SetText("")
+                        else
+                            local remainingTime = activeBuffInfo.endTime - GetGameTimeMilliseconds()
+                            if remainingTime > 0 then
+                                if remainingTime > 60000 then
+                                    timerLabel:SetText(string.format("%.1fm", remainingTime / 60000))
+                                else
+                                    timerLabel:SetText(string.format("%.1f", remainingTime / 1000))
+                                end
+                            else
+                                timerLabel:SetText("")
+                            end
+                        end
+                        timerLabel:SetHidden(false)
+                    else
+                        if timerLabel then timerLabel:SetHidden(true) end
+                    end
+
+                    -- Stack count display
+                    if stackLabel and ShouldIUlt.savedVars.showStacks and activeBuffInfo.stackCount > 1 then
+                        stackLabel:SetText(tostring(activeBuffInfo.stackCount))
+                        stackLabel:SetHidden(false)
+                    else
+                        if stackLabel then stackLabel:SetHidden(true) end
+                    end
+                else
+                    -- Buff is inactive - semi-transparent
+                    buffIcon:SetAlpha(inactiveOpacity)
+                    iconControl:SetColor(0.6, 0.6, 0.6, 1) -- Dimmed color
+
+                    -- Hide timer and stack for inactive buffs
+                    if timerLabel then timerLabel:SetHidden(true) end
+                    if stackLabel then stackLabel:SetHidden(true) end
+                end
+
+                index = index + 1
+                if index > 14 then break end
+            end
+        end
+    end
+
+    -- Hide any remaining unused icons
+    for i = index, 14 do
+        local buffIcon = container:GetNamedChild("BuffIcon" .. i)
+        if buffIcon then
+            buffIcon:SetHidden(true)
+        end
+    end
+end
+
+function ShouldIUlt:UpdateDynamicContainer(displayBuffs)
+    local container = BuffTrackerContainer
+    if not container then return end
+
+    -- Show active buffs (original behavior)
+    local index = 1
+    for abilityId, buffInfo in pairs(displayBuffs) do
+        local buffIcon = container:GetNamedChild("BuffIcon" .. index)
+        if buffIcon then
+            local iconControl = buffIcon:GetNamedChild("Icon")
+            local timerLabel = buffIcon:GetNamedChild("Timer")
+            local stackLabel = buffIcon:GetNamedChild("Stack")
+
+            if iconControl and buffInfo.iconName then
+                iconControl:SetTexture(buffInfo.iconName)
+                buffIcon:SetHidden(false)
+                buffIcon:SetAlpha(1.0) -- Always full opacity in dynamic mode
+
+                -- Color the icon based on buff type
+                if buffInfo.isOffBalanceImmunity or buffInfo.isImmunityTimer then
+                    iconControl:SetColor(1, 0.02, 0, 1)  -- Red for immunity
+                elseif buffInfo.name == "Off-Balance" and not buffInfo.isImmunityTimer then
+                    iconControl:SetColor(0, 0.7, 0.5, 1) -- Green for active off-balance
+                else
+                    iconControl:SetColor(1, 1, 1, 1)     -- Normal color
+                end
+
+                -- Timer display
+                if timerLabel and ShouldIUlt.savedVars.showTimer then
+                    if buffInfo.isPermanent then
+                        timerLabel:SetText("")
+                    else
+                        local remainingTime = buffInfo.endTime - GetGameTimeMilliseconds()
+                        if remainingTime > 0 then
+                            if remainingTime > 60000 then
+                                timerLabel:SetText(string.format("%.1fm", remainingTime / 60000))
+                            else
+                                timerLabel:SetText(string.format("%.1f", remainingTime / 1000))
+                            end
+                        else
+                            timerLabel:SetText("")
+                        end
+                    end
+                    timerLabel:SetHidden(false)
+                else
+                    if timerLabel then timerLabel:SetHidden(true) end
+                end
+
+                -- Stack count display
+                if stackLabel and ShouldIUlt.savedVars.showStacks and buffInfo.stackCount > 1 then
+                    stackLabel:SetText(tostring(buffInfo.stackCount))
+                    stackLabel:SetHidden(false)
+                else
+                    if stackLabel then stackLabel:SetHidden(true) end
+                end
+
+                index = index + 1
+                if index > 14 then break end
+            end
+        end
+    end
+
+    -- Hide any remaining unused icons
+    for i = index, 14 do
+        local buffIcon = container:GetNamedChild("BuffIcon" .. i)
+        if buffIcon then
+            buffIcon:SetHidden(true)
+        end
+    end
+end
+
+-- New function to get static buff slots based on enabled tracking
+function ShouldIUlt:GetStaticBuffSlots()
+    local slots = {}
+
+    -- Create slots for each enabled buff type
+    for buffType, data in pairs(self.buffTypeMap) do
+        if ShouldIUlt.savedVars[data.setting] then
+            -- Add major buff slot if it exists
+            if data.major then
+                table.insert(slots, {
+                    buffName = data.major,
+                    iconPath = self:GetBuffIcon(data.major),
+                    buffType = buffType,
+                    isMajor = true
+                })
+            end
+
+            -- Add minor buff slot if it exists
+            if data.minor then
+                table.insert(slots, {
+                    buffName = data.minor,
+                    iconPath = self:GetBuffIcon(data.minor),
+                    buffType = buffType,
+                    isMajor = false
+                })
+            end
+        end
+    end
+
+    -- Handle combined settings
+    if ShouldIUlt.savedVars.trackWeaponSpellDamage then
+        if not ShouldIUlt.savedVars.trackBrutality then
+            table.insert(slots, {
+                buffName = "Major Brutality",
+                iconPath = self:GetBuffIcon("Major Brutality"),
+                buffType = "brutality",
+                isMajor = true
+            })
+            table.insert(slots, {
+                buffName = "Minor Brutality",
+                iconPath = self:GetBuffIcon("Minor Brutality"),
+                buffType = "brutality",
+                isMajor = false
+            })
+        end
+        if not ShouldIUlt.savedVars.trackSorcery then
+            table.insert(slots, {
+                buffName = "Major Sorcery",
+                iconPath = self:GetBuffIcon("Major Sorcery"),
+                buffType = "sorcery",
+                isMajor = true
+            })
+            table.insert(slots, {
+                buffName = "Minor Sorcery",
+                iconPath = self:GetBuffIcon("Minor Sorcery"),
+                buffType = "sorcery",
+                isMajor = false
+            })
+        end
+    end
+
+    if ShouldIUlt.savedVars.trackWeaponSpellCrit then
+        if not ShouldIUlt.savedVars.trackProphecy then
+            table.insert(slots, {
+                buffName = "Major Prophecy",
+                iconPath = self:GetBuffIcon("Major Prophecy"),
+                buffType = "prophecy",
+                isMajor = true
+            })
+            table.insert(slots, {
+                buffName = "Minor Prophecy",
+                iconPath = self:GetBuffIcon("Minor Prophecy"),
+                buffType = "prophecy",
+                isMajor = false
+            })
+        end
+        if not ShouldIUlt.savedVars.trackSavagery then
+            table.insert(slots, {
+                buffName = "Major Savagery",
+                iconPath = self:GetBuffIcon("Major Savagery"),
+                buffType = "savagery",
+                isMajor = true
+            })
+            table.insert(slots, {
+                buffName = "Minor Savagery",
+                iconPath = self:GetBuffIcon("Minor Savagery"),
+                buffType = "savagery",
+                isMajor = false
+            })
+        end
+    end
+
+    return slots
 end
 
 function ShouldIUlt:Cleanup()

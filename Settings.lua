@@ -155,7 +155,7 @@ function ShouldIUlt:CreateSettingsMenu()
             name = "Horizontal Position",
             min = -1960,
             max = 1960,
-            step = 10,
+            step = 20,
             getFunc = function() return ShouldIUlt.savedVars.positionX end,
             setFunc = function(value)
                 ShouldIUlt.savedVars.positionX = value
@@ -168,7 +168,7 @@ function ShouldIUlt:CreateSettingsMenu()
             name = "Vertical Position",
             min = -1540,
             max = 1540,
-            step = 10,
+            step = 20,
             getFunc = function() return ShouldIUlt.savedVars.positionY end,
             setFunc = function(value)
                 ShouldIUlt.savedVars.positionY = value
@@ -198,6 +198,72 @@ function ShouldIUlt:CreateSettingsMenu()
                 ShouldIUlt.savedVars.showTimer = value
                 ShouldIUlt:UpdateUI()
             end,
+        },
+        {
+            type = "slider",
+            name = "Timer Decimal Threshold",
+            tooltip =
+            "Show decimal places on timers when remaining time is below this value (in seconds). Above this threshold, only whole seconds are shown.",
+            min = 1.0,
+            max = 30.0,
+            step = 0.5,
+            getFunc = function() return ShouldIUlt.savedVars.timerThreshold or 10.0 end,
+            setFunc = function(value)
+                ShouldIUlt.savedVars.timerThreshold = value
+                ShouldIUlt:UpdateUI()
+            end,
+            disabled = function() return not ShouldIUlt.savedVars.showTimer end,
+        },
+        {
+            type = "checkbox",
+            name = "Show Stacks",
+            getFunc = function() return ShouldIUlt.savedVars.showStacks end,
+            setFunc = function(value)
+                ShouldIUlt.savedVars.showStacks = value
+                ShouldIUlt:UpdateUI()
+            end,
+        },
+
+        {
+            type = "checkbox",
+            name = "Static Container Mode",
+            tooltip =
+            "Show slots for all tracked buffs. Inactive buffs appear semi-transparent, active buffs are fully visible.",
+            getFunc = function() return ShouldIUlt.savedVars.staticContainer end,
+            setFunc = function(value)
+                ShouldIUlt.savedVars.staticContainer = value
+                ShouldIUlt:UpdateUI()
+            end,
+        },
+        {
+            type = "slider",
+            name = "Inactive Buff Opacity",
+            tooltip =
+            "How transparent inactive buffs appear in static container mode (0.1 = very transparent, 1.0 = fully visible)",
+            min = 0.1,
+            max = 1.0,
+            step = 0.1,
+            getFunc = function() return ShouldIUlt.savedVars.inactiveBuffOpacity or 0.3 end,
+            setFunc = function(value)
+                ShouldIUlt.savedVars.inactiveBuffOpacity = value
+                ShouldIUlt:UpdateUI()
+            end,
+            disabled = function() return not ShouldIUlt.savedVars.staticContainer end,
+        },
+        {
+            type = "slider",
+            name = "Container Size",
+            tooltip = "1 = Vertical  14 = Horizontal ",
+            min = 1,
+            max = 14,
+            step = 1,
+            getFunc = function() return ShouldIUlt.savedVars.maxIconsPerRow or 7 end,
+            setFunc = function(value)
+                ShouldIUlt.savedVars.maxIconsPerRow = value
+                ShouldIUlt:UpdateUI()
+            end,
+            width = "half",
+            disabled = function() return ShouldIUlt.savedVars.layoutDirection == "vertical" end,
         },
         {
             type = "header",
