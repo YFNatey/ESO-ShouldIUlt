@@ -2,7 +2,8 @@
 ## The Elder Scrolls® and related logos are registered trademarks or trademarks of ZeniMax Media Inc.
 ## in the United States and/or other countries. All rights reserved.
 
-## Title: Buffs and Debuffs
+## Title: CommonBuffs Tracker
+## Description: Track the buffs that matter most. Centralizes common player buffs and boss debuffs to help maximize your damage while reducing UI clutter. NOTE: Keep "Self Debuffs" ON in ESO settings (not addon settings).
 ## Author: YFNatey
 ## Version: 1.0
 ## APIVersion: 101046

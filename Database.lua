@@ -14,7 +14,45 @@ ShouldIUlt.buffDatabase = {
             [61782] = "Minor Vulnerability",
             [68359] = "Minor Vulnerability",
             [79715] = "Minor Vulnerability",
+            [79717] = "Minor Vulnerability",
+            [79720] = "Minor Vulnerability",
+            [79723] = "Minor Vulnerability",
+            [79726] = "Minor Vulnerability",
+            [79843] = "Minor Vulnerability",
+            [79844] = "Minor Vulnerability",
+            [79845] = "Minor Vulnerability",
+            [79846] = "Minor Vulnerability",
             [81519] = "Minor Vulnerability",
+            [117025] = "Minor Vulnerability",
+            [118613] = "Minor Vulnerability",
+            [120030] = "Minor Vulnerability",
+            [124803] = "Minor Vulnerability",
+            [124804] = "Minor Vulnerability",
+            [124806] = "Minor Vulnerability",
+            [130155] = "Minor Vulnerability",
+            [130168] = "Minor Vulnerability",
+            [130173] = "Minor Vulnerability",
+            [185920] = "Minor Vulnerability",
+            [185449] = "Minor Vulnerability",
+            [186754] = "Minor Vulnerability",
+            [191299] = "Minor Vulnerability",
+            [185923] = "Minor Vulnerability",
+            [183271] = "Minor Vulnerability",
+            [214992] = "Minor Vulnerability",
+            [216255] = "Minor Vulnerability",
+            [217658] = "Minor Vulnerability",
+            [208043] = "Minor Vulnerability",
+            [221728] = "Minor Vulnerability",
+            [218989] = "Minor Vulnerability",
+            [222722] = "Minor Vulnerability",
+            [204879] = "Minor Vulnerability",
+            [228104] = "Minor Vulnerability",
+            [228115] = "Minor Vulnerability",
+            [228118] = "Minor Vulnerability",
+            [238097] = "Minor Vulnerability",
+            [238269] = "Minor Vulnerability",
+            [224387] = "Minor Vulnerability",
+
         },
         brittle = {
             [145977] = "Major Brittle",
@@ -48,6 +86,13 @@ ShouldIUlt.buffDatabase = {
             [62968] = "Off-Balance",  -- unmorphed wall
             [39077] = "Off-Balance",  -- explosive wall
 
+        },
+        setDebuffs = {
+            [126597] = "Zens",
+            [127070] = "Martial-Knowledge"
+        },
+        setBuffs = {
+            [154737] = "Sul-Xan"
         }
     },
 
@@ -139,10 +184,26 @@ ShouldIUlt.buffDatabase = {
         [68595] = "Minor Force",
         [68628] = "Minor Force",
         [76564] = "Minor Force",
+        [80984] = "Minor Force",
+        [80986] = "Minor Force",
+        [85611] = "Minor Force",
+        [103521] = "Minor Force",
+        [103708] = "Minor Force",
+        [103712] = "Minor Force",
+        [106861] = "Minor Force",
+        [176852] = "Minor Force",
+        [188427] = "Minor Force",
+        [214863] = "Minor Force",
         [46522] = "Major Force",
         [46533] = "Major Force",
         [46536] = "Major Force",
-        [46539] = "Major Force"
+        [46539] = "Major Force",
+        [154830] = "Major Force",
+        [176849] = "Major Force",
+        [249160] = "Major Force",
+        [40225] = "Major Force",
+        [85154] = "Major Force",
+        [221602] = "Major Force",
     },
     warhorn = {
         [40224] = "Aggressive Horn"
@@ -296,7 +357,7 @@ ShouldIUlt.buffTypeMap = {
 }
 
 
-function ShouldIUlt:GetBuffIcon(buffName)
+function ShouldIUlt:GetBuffIcon(buffName, suppressFallback)
     local iconMap = {
         -- Major buffs
         ["Major Vulnerability"] = "/esoui/art/icons/ability_debuff_major_vulnerability.dds",
@@ -313,6 +374,7 @@ function ShouldIUlt:GetBuffIcon(buffName)
         ["Major Force"] = "/esoui/art/icons/ability_buff_major_force.dds",
         ["Major Berserk"] = "/esoui/art/icons/ability_buff_major_berserk.dds",
         ["Major Breach"] = "/esoui/art/icons/ability_buff_major_breach.dds",
+        ["Major Heroism"] = "/esoui/art/icons/ability_buff_major_heroism.dds",
         ["Off-Balance"] = "/esoui/art/icons/ability_debuff_offbalance.dds",
         ["Off-Balance Immunity"] = "/esoui/art/icons/ability_debuff_offbalance.dds",
         ["Major Courage"] = "/esoui/art/icons/ability_buff_major_courage.dds",
@@ -324,7 +386,6 @@ function ShouldIUlt:GetBuffIcon(buffName)
         ["Minor Prophecy"] = "/esoui/art/icons/ability_buff_minor_prophecy.dds",
         ["Minor Savagery"] = "/esoui/art/icons/ability_buff_minor_savagery.dds",
         ["Minor Resolve"] = "/esoui/art/icons/ability_buff_minor_resolve.dds",
-
         ["Minor Endurance"] = "/esoui/art/icons/ability_buff_minor_endurance.dds",
         ["Minor Intellect"] = "/esoui/art/icons/ability_buff_minor_intellect.dds",
         ["Minor Brittle"] = "/esoui/art/icons/ability_debuff_minor_brittle.dds",
@@ -352,9 +413,12 @@ function ShouldIUlt:GetBuffIcon(buffName)
         ["Minor Vitality"] = "/esoui/art/icons/ability_buff_minor_vitality.dds",
         ["PowerfulAssault"] = "/esoui/art/icons/ability_healer_019.dds",
         ["Abyssal Ink"] = "/esoui/art/icons/ability_scribing_grimoire_005.dds",
-
     }
-    -- Fallback
+    -- Fallback if icon doesnt exist
+    if suppressFallback then
+        return iconMap[buffName]
+    end
+
     return iconMap[buffName] or "/esoui/art/icons/ability_weapon_001.dds"
 end
 

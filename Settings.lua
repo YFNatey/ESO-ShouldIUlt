@@ -126,10 +126,19 @@ function ShouldIUlt:CreateSettingsMenu()
             type = "header",
             name = "Display Settings",
         },
+
+        {
+            type = "checkbox",
+            name = "Test Display",
+            tooltip = "Show simulated buffs instead of real ones (for testing UI layout)",
+            getFunc = function() return ShouldIUlt.savedVars.simulationMode end,
+            setFunc = function(value)
+                ShouldIUlt:SetSimulationMode(value)
+            end,
+        },
         {
             type = "slider",
-            name = "Container Size",
-            tooltip = "1 = Vertical  14 = Horizontal ",
+            name = "Number of Columns",
             min = 1,
             max = 14,
             step = 1,
@@ -140,15 +149,6 @@ function ShouldIUlt:CreateSettingsMenu()
             end,
             width = "half",
             disabled = function() return ShouldIUlt.savedVars.layoutDirection == "vertical" end,
-        },
-        {
-            type = "checkbox",
-            name = "Test Display",
-            tooltip = "Show simulated buffs instead of real ones (for testing UI layout)",
-            getFunc = function() return ShouldIUlt.savedVars.simulationMode end,
-            setFunc = function(value)
-                ShouldIUlt:SetSimulationMode(value)
-            end,
         },
         {
             type = "slider",
@@ -191,8 +191,11 @@ function ShouldIUlt:CreateSettingsMenu()
             width = "half",
         },
         {
+            type = "divider"
+        },
+        {
             type = "checkbox",
-            name = "Show Timer",
+            name = "Timers",
             getFunc = function() return ShouldIUlt.savedVars.showTimer end,
             setFunc = function(value)
                 ShouldIUlt.savedVars.showTimer = value
@@ -201,9 +204,7 @@ function ShouldIUlt:CreateSettingsMenu()
         },
         {
             type = "slider",
-            name = "Timer Decimal Threshold",
-            tooltip =
-            "Show decimal places on timers when remaining time is below this value (in seconds). Above this threshold, only whole seconds are shown.",
+            name = "Decimal Threshold",
             min = 1.0,
             max = 30.0,
             step = 0.5,
@@ -214,24 +215,20 @@ function ShouldIUlt:CreateSettingsMenu()
             end,
             disabled = function() return not ShouldIUlt.savedVars.showTimer end,
         },
-        {
-            type = "checkbox",
-            name = "Show Stacks",
-            getFunc = function() return ShouldIUlt.savedVars.showStacks end,
-            setFunc = function(value)
-                ShouldIUlt.savedVars.showStacks = value
-                ShouldIUlt:UpdateUI()
-            end,
+        --[[{
+            type = "divider"
         },
-
         {
             type = "checkbox",
-            name = "Static Container Mode",
+            name = "Static Display Mode",
             tooltip =
-            "Show slots for all tracked buffs. Inactive buffs appear semi-transparent, active buffs are fully visible.",
+            "Show transparent icons for all tracked buffs. Active buffs become fully visible.",
             getFunc = function() return ShouldIUlt.savedVars.staticContainer end,
             setFunc = function(value)
                 ShouldIUlt.savedVars.staticContainer = value
+                if value then
+                    ShouldIUlt.savedVars.hidePermanentBuffs = false
+                end
                 ShouldIUlt:UpdateUI()
             end,
         },
@@ -239,7 +236,7 @@ function ShouldIUlt:CreateSettingsMenu()
             type = "slider",
             name = "Inactive Buff Opacity",
             tooltip =
-            "How transparent inactive buffs appear in static container mode (0.1 = very transparent, 1.0 = fully visible)",
+            "How transparent inactive buffs appear in static display mode",
             min = 0.1,
             max = 1.0,
             step = 0.1,
@@ -249,22 +246,7 @@ function ShouldIUlt:CreateSettingsMenu()
                 ShouldIUlt:UpdateUI()
             end,
             disabled = function() return not ShouldIUlt.savedVars.staticContainer end,
-        },
-        {
-            type = "slider",
-            name = "Container Size",
-            tooltip = "1 = Vertical  14 = Horizontal ",
-            min = 1,
-            max = 14,
-            step = 1,
-            getFunc = function() return ShouldIUlt.savedVars.maxIconsPerRow or 7 end,
-            setFunc = function(value)
-                ShouldIUlt.savedVars.maxIconsPerRow = value
-                ShouldIUlt:UpdateUI()
-            end,
-            width = "half",
-            disabled = function() return ShouldIUlt.savedVars.layoutDirection == "vertical" end,
-        },
+        },]]
         {
             type = "header",
             name = "Should I Ult? (Experimental)",
@@ -318,10 +300,7 @@ function ShouldIUlt:CreateSettingsMenu()
             end,
             disabled = function() return not ShouldIUlt.savedVars.enableUltCheck end,
         },
-        {
-            type = "header",
-            name = "Ult Required Buffs",
-        },
+
 
         -- DAMAGE DEBUFFS SECTION
         {
@@ -451,7 +430,9 @@ function ShouldIUlt:CreateBuffToggleOption(buffType, displayName, majorIcon, min
         setFunc = function(value)
             ShouldIUlt.savedVars[data.setting] = value
             ShouldIUlt:ScanCurrentBuffs()
-            ShouldIUlt:UpdateUI()
+            self.staticSlotsCache = nil
+            self.lastStaticSettingsHash = nil
+            self:UpdateUI()
         end,
     }
 end
@@ -491,7 +472,9 @@ function ShouldIUlt:CreateCombinedBuffToggleOption(settingName, displayName, des
             ShouldIUlt.savedVars[settingName] = value
             ShouldIUlt:SyncCombinedSettings()
             ShouldIUlt:ScanCurrentBuffs()
-            ShouldIUlt:UpdateUI()
+            self.staticSlotsCache = nil
+            self.lastStaticSettingsHash = nil
+            self:UpdateUI()
         end,
     }
 end

@@ -5,19 +5,31 @@ ShouldIUlt = {}
 ShouldIUlt.savedVars = nil
 ShouldIUlt.buffData = {}
 ShouldIUlt.isInitialized = false
+
+-- Optimize function calls
 ShouldIUlt.lastScanTime = 0
 ShouldIUlt.scanThrottle = 250
 ShouldIUlt.lastUltCheck = 0
 ShouldIUlt.ultCheckThrottle = 500
 
+-- Off Baklance Timers
 ShouldIUlt.offBalanceImmunityTimer = nil
 ShouldIUlt.offBalanceImmunityEndTime = 0
 ShouldIUlt.offBalanceImmunityDuration = 15000
 
+-- Static mode caching
+ShouldIUlt.staticSlotsCache = nil
+ShouldIUlt.lastStaticSettingsHash = nil
+ShouldIUlt.pendingUIUpdate = false
+ShouldIUlt.pendingBossUpdate = false
+ShouldIUlt.pendingDebuffUpdate = false
+
+-- Buff Caching
+ShouldIUlt.buffNameCache = {}
+ShouldIUlt.trackedBuffsCache = nil
+ShouldIUlt.lastSettingsHash = nil
 ShouldIUlt.cachedSimulatedBuffs = nil
 ShouldIUlt.simulationCacheTime = 0
-
-
 ---=============================================================================
 -- Scan Boss Debuffs and player Buffs
 --=============================================================================
@@ -122,47 +134,54 @@ end
 
 function ShouldIUlt:ScanTargetDebuffs()
     local currentTime = GetGameTimeMilliseconds()
+
+    -- Throttle
     if (currentTime - self.lastScanTime) < self.scanThrottle then
         return
     end
     self.lastScanTime = currentTime
     local targetTag = "reticleover"
-    if not DoesUnitExist(targetTag) then
-        if self.bossDebuffData then
-            for abilityId in pairs(self.bossDebuffData) do
-                self.bossDebuffData[abilityId] = nil
-            end
-        end
-        return
-    end
-
-    local targetName = GetUnitName(targetTag)
-    if not IsUnitAttackable(targetTag) then
-        return
-    end
 
     if not self.bossDebuffData then
         self.bossDebuffData = {}
     end
 
+    -- Renmove expired Buffs from display
+    if not DoesUnitExist(targetTag) then
+        self:CleanupExpiredDebuffs(currentTime)
+        return
+    end
+
+    local targetName = GetUnitName(targetTag)
+    if not IsUnitAttackable(targetTag) then
+        self:CleanupExpiredDebuffs(currentTime)
+        return
+    end
+
+    -- Build lookup table for tracked buffs
     local trackedBuffIds = {}
     for _, buffId in ipairs(self:GetTrackedBuffs()) do
         trackedBuffIds[buffId] = true
     end
 
+    -- Track existing debuffs for differential analysis
     local existingDebuffs = {}
     for abilityId in pairs(self.bossDebuffData) do
         existingDebuffs[abilityId] = true
     end
 
+    -- Scan current target for debuffs
     local numberOfBuffs = GetNumBuffs(targetTag)
     local maxBuffsToCheck = math.min(numberOfBuffs, 50)
 
     for i = 0, maxBuffsToCheck do
         local buffName, timeStarted, timeEnding, buffSlot, stackCount, iconFilename, buffType, effectType, abilityType, statusEffectType, abilityId, canClickOff, castByPlayer =
             GetUnitBuffInfo(targetTag, i)
+
         if buffName and abilityId and trackedBuffIds[abilityId] then
+            -- Remove from cleanup list
             existingDebuffs[abilityId] = nil
+
             local startTimeMs = timeStarted * 1000
             local endTimeMs = timeEnding * 1000
             local durationMs = endTimeMs - startTimeMs
@@ -174,6 +193,8 @@ function ShouldIUlt:ScanTargetDebuffs()
             end
 
             local isOffBalanceImmunity = (abilityId == 134599)
+
+            -- Update or create debuff entry with enhanced metadata
             self.bossDebuffData[abilityId] = {
                 name = buffName,
                 iconName = iconFilename,
@@ -186,15 +207,107 @@ function ShouldIUlt:ScanTargetDebuffs()
                 bossName = targetName,
                 isBossDebuff = true,
                 isOffBalanceImmunity = isOffBalanceImmunity,
-                isPermanent = isPermanent
+                isPermanent = isPermanent,
+                lastSeen = currentTime,
+                activelyDetected = true
             }
         end
     end
-
-    -- Remove expired debuffs
     for abilityId in pairs(existingDebuffs) do
+        local debuffInfo = self.bossDebuffData[abilityId]
+        if debuffInfo then
+            local shouldRemove = false
+
+            if debuffInfo.isPermanent then
+                -- Permanent debuffs
+                if currentTime - debuffInfo.lastSeen > 10000 then -- 10 second grace period
+                    shouldRemove = true
+                end
+            else
+                -- Timed debuffs
+                if (debuffInfo.endTime > 0 and currentTime >= debuffInfo.endTime) or
+                    (currentTime - debuffInfo.lastSeen > 5000) then -- 5 second grace period
+                    shouldRemove = true
+                end
+            end
+
+            if shouldRemove then
+                self.bossDebuffData[abilityId] = nil
+            else
+                -- Mark as no longer actively detected but keep in memory
+                debuffInfo.activelyDetected = false
+            end
+        end
+    end
+end
+
+function ShouldIUlt:CleanupExpiredDebuffs(currentTime)
+    if not self.bossDebuffData then
+        return
+    end
+
+    local expiredDebuffs = {}
+
+    for abilityId, debuffInfo in pairs(self.bossDebuffData) do
+        local shouldRemove = false
+
+        if debuffInfo.isPermanent then
+            -- Permanent debuffs
+            local timeSinceLastSeen = currentTime - (debuffInfo.lastSeen or 0)
+            if timeSinceLastSeen > 15000 then -- 15 second timeout for permanent effects
+                shouldRemove = true
+            end
+        else
+            -- Timed debuffs
+            local timeSinceLastSeen = currentTime - (debuffInfo.lastSeen or 0)
+            local naturallyExpired = debuffInfo.endTime > 0 and currentTime >= debuffInfo.endTime
+            local absentTooLong = timeSinceLastSeen > 8000 -- 8 second timeout
+
+            if naturallyExpired or absentTooLong then
+                shouldRemove = true
+            end
+        end
+
+        if shouldRemove then
+            table.insert(expiredDebuffs, abilityId)
+        end
+    end
+
+    for _, abilityId in ipairs(expiredDebuffs) do
         self.bossDebuffData[abilityId] = nil
     end
+
+    -- Trigger UI update if cleanup occurred
+    if #expiredDebuffs > 0 then
+        if not self.pendingDebuffUpdate then
+            self.pendingDebuffUpdate = true
+            zo_callLater(function()
+                self.pendingDebuffUpdate = false
+                self:UpdateUI()
+            end, 100)
+        end
+    end
+end
+
+function ShouldIUlt:IsDebuffValid(abilityId, debuffInfo)
+    if not debuffInfo then
+        return false
+    end
+
+    local currentTime = GetGameTimeMilliseconds()
+
+
+    if not debuffInfo.isPermanent and debuffInfo.endTime > 0 then
+        if currentTime >= debuffInfo.endTime then
+            return false
+        end
+    end
+
+
+    local timeSinceLastSeen = currentTime - (debuffInfo.lastSeen or 0)
+    local maxValidTime = debuffInfo.isPermanent and 15000 or 8000
+
+    return timeSinceLastSeen <= maxValidTime
 end
 
 function ShouldIUlt:GetDisplayBuffs()
@@ -322,6 +435,7 @@ function ShouldIUlt:StartOBImmunityTimer()
     -- Create a unique timer name
     local timerName = ADDON_NAME .. "OffBalanceImmunity" .. tostring(currentTime)
     self.offBalanceImmunityTimer = timerName
+
     EVENT_MANAGER:RegisterForUpdate(timerName, 100, function()
         local now = GetGameTimeMilliseconds()
         if now >= self.offBalanceImmunityEndTime then
@@ -329,6 +443,8 @@ function ShouldIUlt:StartOBImmunityTimer()
             self:UpdateUI()
         end
     end)
+
+    -- Immediate UI update when immunity starts
     self:UpdateUI()
 end
 
@@ -452,13 +568,12 @@ function ShouldIUlt:CheckUltConditions()
         requiredBuffs["Abyssal Ink"] = false
     end
 
-    -- If no buffs are required, don't show ult message
+
     if next(requiredBuffs) == nil then
         self.lastUltResult = false
         return false
     end
 
-    -- Check player buffs (optimized lookup)
     for abilityId, buffInfo in pairs(self.buffData) do
         local buffName = self:FindBuffNameInDatabase(abilityId)
         if buffName and requiredBuffs[buffName] ~= nil then
@@ -624,13 +739,14 @@ function ShouldIUlt:OnEffectChanged(changeType, effectSlot, effectName, unitTag,
         return
     end
 
+    local shouldUpdateUI = false
+
     if changeType == EFFECT_RESULT_GAINED or changeType == EFFECT_RESULT_UPDATED then
         local startTimeMs = beginTime * 1000
         local endTimeMs = endTime * 1000
         local durationMs = endTimeMs - startTimeMs
 
         local isPermanent = false
-
         if beginTime == endTime then
             isPermanent = true
         elseif durationMs <= 0 then
@@ -655,20 +771,30 @@ function ShouldIUlt:OnEffectChanged(changeType, effectSlot, effectName, unitTag,
             isPermanent = isPermanent
         }
 
-        -- If off-balance is gained, clear any immunity timer
+        -- Cancel timer if off balance is applied (useful when there are multiple bosses)
         if self:IsOffBalanceBuff(abilityId) then
             self:ClearOffBalanceImmunityTimer()
         end
 
-        self:UpdateUI()
+        shouldUpdateUI = true
     elseif changeType == EFFECT_RESULT_FADED then
-        -- Check if this is an off-balance effect that just faded
         if self:IsOffBalanceBuff(abilityId) and ShouldIUlt.savedVars.showOffBalanceImmunity then
             self:StartOBImmunityTimer()
         end
 
         self.buffData[abilityId] = nil
-        self:UpdateUI()
+        shouldUpdateUI = true
+    end
+
+    -- Throttle UI updates to prevent spam
+    if shouldUpdateUI then
+        if not self.pendingUIUpdate then
+            self.pendingUIUpdate = true
+            zo_callLater(function()
+                self.pendingUIUpdate = false
+                self:UpdateUI()
+            end, 50)
+        end
     end
 end
 
@@ -678,6 +804,8 @@ function ShouldIUlt:OnBossEffectChanged(changeType, effectSlot, effectName, unit
     if not self:IsTrackedBuff(abilityId) then
         return
     end
+
+    local shouldUpdateUI = false
 
     if changeType == EFFECT_RESULT_GAINED or changeType == EFFECT_RESULT_UPDATED then
         if not self.bossDebuffData then
@@ -709,25 +837,40 @@ function ShouldIUlt:OnBossEffectChanged(changeType, effectSlot, effectName, unit
             bossName = bossName,
             isBossDebuff = true,
             isOffBalanceImmunity = isOffBalanceImmunity,
-            isPermanent = isPermanent
+            isPermanent = isPermanent,
+            lastSeen = GetGameTimeMilliseconds() -- Track when we last saw this debuff
         }
-
-        -- If off-balance is gained, clear any immunity timer
         if self:IsOffBalanceBuff(abilityId) then
             self:ClearOffBalanceImmunityTimer()
         end
 
-        self:UpdateUI()
+        shouldUpdateUI = true
     elseif changeType == EFFECT_RESULT_FADED then
-        -- Check if this is an off-balance effect that just faded
         if self:IsOffBalanceBuff(abilityId) and ShouldIUlt.savedVars.showOffBalanceImmunity then
             self:StartOBImmunityTimer()
         end
 
-        if self.bossDebuffData then
-            self.bossDebuffData[abilityId] = nil
+        if self.bossDebuffData and self.bossDebuffData[abilityId] then
+            local currentTime = GetGameTimeMilliseconds()
+
+            if self.bossDebuffData[abilityId].endTime > currentTime + 2000 then
+                self.bossDebuffData[abilityId].gracePeriod = currentTime + 5000
+            else
+                self.bossDebuffData[abilityId] = nil
+            end
         end
-        self:UpdateUI()
+        shouldUpdateUI = true
+    end
+
+    -- Throttle UI updates
+    if shouldUpdateUI then
+        if not self.pendingBossUpdate then
+            self.pendingBossUpdate = true
+            zo_callLater(function()
+                self.pendingBossUpdate = false
+                self:UpdateUI()
+            end, 50)
+        end
     end
 end
 
@@ -749,16 +892,37 @@ function ShouldIUlt:OnTargetChanged()
     end, 200)
 end
 
+function ShouldIUlt:FormatTimerText(remainingTimeMs)
+    local remainingSeconds = remainingTimeMs / 1000
+    local threshold = ShouldIUlt.savedVars.timerThreshold or 10.0
+
+    if remainingSeconds > 60 then
+        -- Always show minutes without decimals
+        return string.format("%.0fm", remainingSeconds / 60)
+    elseif remainingSeconds > threshold then
+        -- Above threshold: show whole seconds only
+        return string.format("%.0f", remainingSeconds)
+    else
+        -- Below threshold: show with decimal precision
+        return string.format("%.1f", remainingSeconds)
+    end
+end
+
 function ShouldIUlt:StartTimerUpdates()
     EVENT_MANAGER:RegisterForUpdate(ADDON_NAME .. "TimerUpdate", 100, function()
+        -- Only update timers, not full UI
         if ShouldIUlt.savedVars.showTimer then
             ShouldIUlt:UpdateTimersOnly()
         end
 
+        -- Check ult conditions separately
         if ShouldIUlt:CheckUltConditions() then
             ShouldIUlt:ShowUltMessage()
         end
     end)
+
+    -- Initialize persistent debuff tracking
+    self:InitializePersistentDebuffTracking()
 end
 
 ---=============================================================================
@@ -856,82 +1020,67 @@ function ShouldIUlt:UpdateUI()
     -- Get buffs to display
     local displayBuffs = self:GetDisplayBuffs()
 
-    -- Show active buffs
-    local index = 1
-    for abilityId, buffInfo in pairs(displayBuffs) do
-        local buffIcon = container:GetNamedChild("BuffIcon" .. index)
-        if buffIcon then
-            local iconControl = buffIcon:GetNamedChild("Icon")
-            local timerLabel = buffIcon:GetNamedChild("Timer")
-            local stackLabel = buffIcon:GetNamedChild("Stack")
-
-            if iconControl and buffInfo.iconName then
-                iconControl:SetTexture(buffInfo.iconName)
-                buffIcon:SetHidden(false)
-
-                -- Color the icon based on buff type
-                if buffInfo.isOffBalanceImmunity or buffInfo.isImmunityTimer then
-                    iconControl:SetColor(1, 0.02, 0, 1)  -- Red for immunity
-                elseif buffInfo.name == "Off-Balance" and not buffInfo.isImmunityTimer then
-                    iconControl:SetColor(0, 0.7, 0.5, 1) -- Green for active off-balance
-                else
-                    iconControl:SetColor(1, 1, 1, 1)     -- Normal color
-                end
-
-                -- Timer display
-                if timerLabel and ShouldIUlt.savedVars.showTimer then
-                    if buffInfo.isPermanent then
-                        timerLabel:SetText("")
-                    else
-                        local remainingTime = buffInfo.endTime - GetGameTimeMilliseconds()
-                        if remainingTime > 0 then
-                            if remainingTime > 60000 then
-                                timerLabel:SetText(string.format("%.1fm", remainingTime / 60000))
-                            else
-                                timerLabel:SetText(string.format("%.1f", remainingTime / 1000))
-                            end
-                        else
-                            timerLabel:SetText("")
-                        end
-                    end
-                    timerLabel:SetHidden(false)
-                else
-                    if timerLabel then timerLabel:SetHidden(true) end
-                end
-
-                -- Stack count display
-                if stackLabel and ShouldIUlt.savedVars.showStacks and buffInfo.stackCount > 1 then
-                    stackLabel:SetText(tostring(buffInfo.stackCount))
-                    stackLabel:SetHidden(false)
-                else
-                    if stackLabel then stackLabel:SetHidden(true) end
-                end
-
-                index = index + 1
-                if index > maxIcons then break end
-            end
-        end
-    end
     if ShouldIUlt.savedVars.staticContainer then
-        -- Static container mode - show slots for all tracked buffs
         self:UpdateStaticContainer(displayBuffs)
     else
-        -- Dynamic container mode - only show active buffs (original behavior)
         self:UpdateDynamicContainer(displayBuffs)
     end
+
     if self:CheckUltConditions() then
         self:ShowUltMessage()
     end
 end
 
--- New function for static container mode
+-- Static Container Mode
+function ShouldIUlt:GetCachedStaticSlots()
+    local settingsHash = ""
+    for buffType, data in pairs(self.buffTypeMap) do
+        if ShouldIUlt.savedVars[data.setting] then
+            settingsHash = settingsHash .. buffType
+        end
+    end
+
+    -- Add combined settings to hash
+    if ShouldIUlt.savedVars.trackWeaponSpellDamage then
+        settingsHash = settingsHash .. "weaponSpellDamage"
+    end
+    if ShouldIUlt.savedVars.trackWeaponSpellCrit then
+        settingsHash = settingsHash .. "weaponSpellCrit"
+    end
+
+    -- Only regenerate if settings changed
+    if not self.staticSlotsCache or self.lastStaticSettingsHash ~= settingsHash then
+        self.staticSlotsCache = self:GetStaticBuffSlots()
+        self.lastStaticSettingsHash = settingsHash
+    end
+
+    return self.staticSlotsCache
+end
+
 function ShouldIUlt:UpdateStaticContainer(activeBuffs)
     local container = BuffTrackerContainer
     if not container then return end
 
-    -- Get all tracked buff types and create static slots
-    local staticSlots = self:GetStaticBuffSlots()
+    -- Use cached slots instead of regenerating
+    local staticSlots = self:GetCachedStaticSlots()
     local inactiveOpacity = ShouldIUlt.savedVars.inactiveBuffOpacity or 0.3
+
+    -- Create optimized lookup tables for both regular buffs and immunity
+    local activeBuffLookup = {}
+    local hasOffBalanceImmunity = false
+
+    for abilityId, buffInfo in pairs(activeBuffs) do
+        if abilityId == 999999 and buffInfo.isImmunityTimer then
+            -- Special handling for immunity timer
+            hasOffBalanceImmunity = true
+            activeBuffLookup["Off-Balance"] = buffInfo
+        else
+            local buffName = self:FindBuffNameInDatabase(abilityId)
+            if buffName then
+                activeBuffLookup[buffName] = buffInfo
+            end
+        end
+    end
 
     local index = 1
     for _, slotInfo in ipairs(staticSlots) do
@@ -942,28 +1091,23 @@ function ShouldIUlt:UpdateStaticContainer(activeBuffs)
             local stackLabel = buffIcon:GetNamedChild("Stack")
 
             if iconControl then
-                -- Set the icon for this buff type
-                iconControl:SetTexture(slotInfo.iconPath)
-                buffIcon:SetHidden(false)
-
-                -- Check if this buff is currently active
-                local isActive = false
-                local activeBuffInfo = nil
-
-                for abilityId, buffInfo in pairs(activeBuffs) do
-                    local buffName = self:FindBuffNameInDatabase(abilityId)
-                    if buffName == slotInfo.buffName then
-                        isActive = true
-                        activeBuffInfo = buffInfo
-                        break
-                    end
+                -- Only set icon texture if it changed (avoid redundant texture loads)
+                local currentTexture = iconControl:GetTextureFileName()
+                if currentTexture ~= slotInfo.iconPath then
+                    iconControl:SetTexture(slotInfo.iconPath)
                 end
 
-                if isActive and activeBuffInfo then
+                buffIcon:SetHidden(false)
+
+                -- Determine if this buff is currently active
+                local activeBuffInfo = activeBuffLookup[slotInfo.buffName]
+                local isActive = (activeBuffInfo ~= nil)
+
+                if isActive then
                     -- Buff is active - full opacity and special coloring
                     buffIcon:SetAlpha(1.0)
 
-                    -- Color the icon based on buff type
+                    -- Color logic with immunity timer support
                     if activeBuffInfo.isOffBalanceImmunity or activeBuffInfo.isImmunityTimer then
                         iconControl:SetColor(1, 0.02, 0, 1)  -- Red for immunity
                     elseif activeBuffInfo.name == "Off-Balance" and not activeBuffInfo.isImmunityTimer then
@@ -979,11 +1123,7 @@ function ShouldIUlt:UpdateStaticContainer(activeBuffs)
                         else
                             local remainingTime = activeBuffInfo.endTime - GetGameTimeMilliseconds()
                             if remainingTime > 0 then
-                                if remainingTime > 60000 then
-                                    timerLabel:SetText(string.format("%.1fm", remainingTime / 60000))
-                                else
-                                    timerLabel:SetText(string.format("%.1f", remainingTime / 1000))
-                                end
+                                timerLabel:SetText(self:FormatTimerText(remainingTime))
                             else
                                 timerLabel:SetText("")
                             end
@@ -1003,7 +1143,7 @@ function ShouldIUlt:UpdateStaticContainer(activeBuffs)
                 else
                     -- Buff is inactive - semi-transparent
                     buffIcon:SetAlpha(inactiveOpacity)
-                    iconControl:SetColor(0.6, 0.6, 0.6, 1) -- Dimmed color
+                    iconControl:SetColor(0.6, 0.6, 0.6, 1) -- Dimmed
 
                     -- Hide timer and stack for inactive buffs
                     if timerLabel then timerLabel:SetHidden(true) end
@@ -1025,11 +1165,208 @@ function ShouldIUlt:UpdateStaticContainer(activeBuffs)
     end
 end
 
+function ShouldIUlt:GetStaticBuffSlots()
+    local slots = {}
+    if ShouldIUlt.savedVars.hidePermanentBuffs then
+        excludedBuffs["Minor Force"] = true
+        excludedBuffs["Minor Slayer"] = true
+    end
+    -- Create slots for each enabled buff type with validation
+    for buffType, data in pairs(self.buffTypeMap) do
+        if ShouldIUlt.savedVars[data.setting] then
+            -- Add major buff slot if it exists AND has valid icon AND is not excluded
+            if data.major and not excludedBuffs[data.major] then
+                local iconPath = self:GetBuffIcon(data.major, true) -- Suppress fallback
+                if iconPath then                                    -- Only add slot if valid icon exists
+                    table.insert(slots, {
+                        buffName = data.major,
+                        iconPath = iconPath,
+                        buffType = buffType,
+                        isMajor = true
+                    })
+                end
+            end
+
+
+            if data.minor and not excludedBuffs[data.minor] then
+                local iconPath = self:GetBuffIcon(data.minor, true)
+                if iconPath then
+                    table.insert(slots, {
+                        buffName = data.minor,
+                        iconPath = iconPath,
+                        buffType = buffType,
+                        isMajor = false
+                    })
+                end
+            end
+        end
+    end
+
+
+    if ShouldIUlt.savedVars.trackWeaponSpellDamage then
+        if not ShouldIUlt.savedVars.trackBrutality then
+            if not excludedBuffs["Major Brutality"] then
+                local majorIcon = self:GetBuffIcon("Major Brutality", true)
+                if majorIcon then
+                    table.insert(slots, {
+                        buffName = "Major Brutality",
+                        iconPath = majorIcon,
+                        buffType = "brutality",
+                        isMajor = true
+                    })
+                end
+            end
+
+            if not excludedBuffs["Minor Brutality"] then
+                local minorIcon = self:GetBuffIcon("Minor Brutality", true)
+                if minorIcon then
+                    table.insert(slots, {
+                        buffName = "Minor Brutality",
+                        iconPath = minorIcon,
+                        buffType = "brutality",
+                        isMajor = false
+                    })
+                end
+            end
+        end
+
+        if not ShouldIUlt.savedVars.trackSorcery then
+            if not excludedBuffs["Major Sorcery"] then
+                local majorIcon = self:GetBuffIcon("Major Sorcery", true)
+                if majorIcon then
+                    table.insert(slots, {
+                        buffName = "Major Sorcery",
+                        iconPath = majorIcon,
+                        buffType = "sorcery",
+                        isMajor = true
+                    })
+                end
+            end
+
+            if not excludedBuffs["Minor Sorcery"] then
+                local minorIcon = self:GetBuffIcon("Minor Sorcery", true)
+                if minorIcon then
+                    table.insert(slots, {
+                        buffName = "Minor Sorcery",
+                        iconPath = minorIcon,
+                        buffType = "sorcery",
+                        isMajor = false
+                    })
+                end
+            end
+        end
+    end
+
+    if ShouldIUlt.savedVars.trackWeaponSpellCrit then
+        if not ShouldIUlt.savedVars.trackProphecy then
+            if not excludedBuffs["Major Prophecy"] then
+                local majorIcon = self:GetBuffIcon("Major Prophecy", true)
+                if majorIcon then
+                    table.insert(slots, {
+                        buffName = "Major Prophecy",
+                        iconPath = majorIcon,
+                        buffType = "prophecy",
+                        isMajor = true
+                    })
+                end
+            end
+
+            if not excludedBuffs["Minor Prophecy"] then
+                local minorIcon = self:GetBuffIcon("Minor Prophecy", true)
+                if minorIcon then
+                    table.insert(slots, {
+                        buffName = "Minor Prophecy",
+                        iconPath = minorIcon,
+                        buffType = "prophecy",
+                        isMajor = false
+                    })
+                end
+            end
+        end
+
+        if not ShouldIUlt.savedVars.trackSavagery then
+            if not excludedBuffs["Major Savagery"] then
+                local majorIcon = self:GetBuffIcon("Major Savagery", true)
+                if majorIcon then
+                    table.insert(slots, {
+                        buffName = "Major Savagery",
+                        iconPath = majorIcon,
+                        buffType = "savagery",
+                        isMajor = true
+                    })
+                end
+            end
+
+            if not excludedBuffs["Minor Savagery"] then
+                local minorIcon = self:GetBuffIcon("Minor Savagery", true)
+                if minorIcon then
+                    table.insert(slots, {
+                        buffName = "Minor Savagery",
+                        iconPath = minorIcon,
+                        buffType = "savagery",
+                        isMajor = false
+                    })
+                end
+            end
+        end
+    end
+
+    return slots
+end
+
+function ShouldIUlt:UpdateStaticTimersOnly()
+    local container = BuffTrackerContainer
+    local staticSlots = self:GetCachedStaticSlots()
+    local displayBuffs = self:GetDisplayBuffs()
+
+    -- Create lookup table for active buffs with immunity timer support
+    local activeBuffLookup = {}
+    for abilityId, buffInfo in pairs(displayBuffs) do
+        if abilityId == 999999 and buffInfo.isImmunityTimer then
+            -- Special handling for immunity timer
+            activeBuffLookup["Off-Balance"] = buffInfo
+        else
+            local buffName = self:FindBuffNameInDatabase(abilityId)
+            if buffName then
+                activeBuffLookup[buffName] = buffInfo
+            end
+        end
+    end
+
+    for i, slotInfo in ipairs(staticSlots) do
+        if i > 14 then break end
+
+        local buffIcon = container:GetNamedChild("BuffIcon" .. i)
+        if buffIcon and not buffIcon:IsHidden() then
+            local timerLabel = buffIcon:GetNamedChild("Timer")
+
+            if timerLabel and ShouldIUlt.savedVars.showTimer then
+                local activeBuffInfo = activeBuffLookup[slotInfo.buffName]
+
+                if activeBuffInfo and not activeBuffInfo.isPermanent then
+                    local remainingTime = activeBuffInfo.endTime - GetGameTimeMilliseconds()
+                    if remainingTime > 0 then
+                        timerLabel:SetText(self:FormatTimerText(remainingTime))
+                        timerLabel:SetHidden(false)
+                    else
+                        timerLabel:SetText("")
+                        timerLabel:SetHidden(true)
+                    end
+                else
+                    timerLabel:SetText("")
+                    timerLabel:SetHidden(true)
+                end
+            end
+        end
+    end
+end
+
+-- Dynamic Conatiner Mode
 function ShouldIUlt:UpdateDynamicContainer(displayBuffs)
     local container = BuffTrackerContainer
     if not container then return end
 
-    -- Show active buffs (original behavior)
+    -- Show active buffs
     local index = 1
     for abilityId, buffInfo in pairs(displayBuffs) do
         local buffIcon = container:GetNamedChild("BuffIcon" .. index)
@@ -1059,11 +1396,7 @@ function ShouldIUlt:UpdateDynamicContainer(displayBuffs)
                     else
                         local remainingTime = buffInfo.endTime - GetGameTimeMilliseconds()
                         if remainingTime > 0 then
-                            if remainingTime > 60000 then
-                                timerLabel:SetText(string.format("%.1fm", remainingTime / 60000))
-                            else
-                                timerLabel:SetText(string.format("%.1f", remainingTime / 1000))
-                            end
+                            timerLabel:SetText(self:FormatTimerText(remainingTime))
                         else
                             timerLabel:SetText("")
                         end
@@ -1096,99 +1429,94 @@ function ShouldIUlt:UpdateDynamicContainer(displayBuffs)
     end
 end
 
--- New function to get static buff slots based on enabled tracking
-function ShouldIUlt:GetStaticBuffSlots()
-    local slots = {}
+function ShouldIUlt:UpdateDynamicTimersOnly()
+    local container = BuffTrackerContainer
+    local displayBuffs = self:GetDisplayBuffs()
 
-    -- Create slots for each enabled buff type
-    for buffType, data in pairs(self.buffTypeMap) do
-        if ShouldIUlt.savedVars[data.setting] then
-            -- Add major buff slot if it exists
-            if data.major then
-                table.insert(slots, {
-                    buffName = data.major,
-                    iconPath = self:GetBuffIcon(data.major),
-                    buffType = buffType,
-                    isMajor = true
-                })
+    local index = 1
+    for abilityId, buffInfo in pairs(displayBuffs) do
+        if index > 14 then break end
+
+        local buffIcon = container:GetNamedChild("BuffIcon" .. index)
+        if buffIcon and not buffIcon:IsHidden() then
+            local timerLabel = buffIcon:GetNamedChild("Timer")
+
+            if timerLabel and ShouldIUlt.savedVars.showTimer then
+                if buffInfo.isPermanent then
+                    timerLabel:SetText("")
+                    timerLabel:SetHidden(true)
+                else
+                    local remainingTime = buffInfo.endTime - GetGameTimeMilliseconds()
+                    if remainingTime > 0 then
+                        timerLabel:SetText(self:FormatTimerText(remainingTime))
+                        timerLabel:SetHidden(false)
+                    else
+                        timerLabel:SetText("")
+                        timerLabel:SetHidden(true)
+                    end
+                end
             end
+        end
+        index = index + 1
+    end
+end
 
-            -- Add minor buff slot if it exists
-            if data.minor then
-                table.insert(slots, {
-                    buffName = data.minor,
-                    iconPath = self:GetBuffIcon(data.minor),
-                    buffType = buffType,
-                    isMajor = false
-                })
+function ShouldIUlt:OnUpdate()
+    ShouldIUlt:UpdateUI()
+end
+
+function ShouldIUlt:UpdateTimersOnly()
+    local container = BuffTrackerContainer
+    if not container then return end
+
+    if ShouldIUlt.savedVars.staticContainer then
+        self:UpdateStaticTimersOnly()
+    else
+        self:UpdateDynamicTimersOnly()
+    end
+end
+
+function ShouldIUlt:InitializePersistentDebuffTracking()
+    -- Initialize persistent tracking timer that runs independently of target changes
+    EVENT_MANAGER:RegisterForUpdate(ADDON_NAME .. "DebuffPersistence", 1000, function()
+        self:UpdatePersistentDebuffs()
+    end)
+end
+
+function ShouldIUlt:UpdatePersistentDebuffs()
+    if not self.bossDebuffData then
+        return
+    end
+
+    local currentTime = GetGameTimeMilliseconds()
+    local expiredDebuffs = {}
+
+    -- Check for expired debuffs
+    for abilityId, debuffInfo in pairs(self.bossDebuffData) do
+        if not debuffInfo.isPermanent and debuffInfo.endTime > 0 then
+            if currentTime >= debuffInfo.endTime then
+                table.insert(expiredDebuffs, abilityId)
             end
         end
     end
 
-    -- Handle combined settings
-    if ShouldIUlt.savedVars.trackWeaponSpellDamage then
-        if not ShouldIUlt.savedVars.trackBrutality then
-            table.insert(slots, {
-                buffName = "Major Brutality",
-                iconPath = self:GetBuffIcon("Major Brutality"),
-                buffType = "brutality",
-                isMajor = true
-            })
-            table.insert(slots, {
-                buffName = "Minor Brutality",
-                iconPath = self:GetBuffIcon("Minor Brutality"),
-                buffType = "brutality",
-                isMajor = false
-            })
-        end
-        if not ShouldIUlt.savedVars.trackSorcery then
-            table.insert(slots, {
-                buffName = "Major Sorcery",
-                iconPath = self:GetBuffIcon("Major Sorcery"),
-                buffType = "sorcery",
-                isMajor = true
-            })
-            table.insert(slots, {
-                buffName = "Minor Sorcery",
-                iconPath = self:GetBuffIcon("Minor Sorcery"),
-                buffType = "sorcery",
-                isMajor = false
-            })
-        end
+    -- Remove expired debuffs and trigger UI update if needed
+    local needsUpdate = false
+    for _, abilityId in ipairs(expiredDebuffs) do
+        self.bossDebuffData[abilityId] = nil
+        needsUpdate = true
     end
 
-    if ShouldIUlt.savedVars.trackWeaponSpellCrit then
-        if not ShouldIUlt.savedVars.trackProphecy then
-            table.insert(slots, {
-                buffName = "Major Prophecy",
-                iconPath = self:GetBuffIcon("Major Prophecy"),
-                buffType = "prophecy",
-                isMajor = true
-            })
-            table.insert(slots, {
-                buffName = "Minor Prophecy",
-                iconPath = self:GetBuffIcon("Minor Prophecy"),
-                buffType = "prophecy",
-                isMajor = false
-            })
-        end
-        if not ShouldIUlt.savedVars.trackSavagery then
-            table.insert(slots, {
-                buffName = "Major Savagery",
-                iconPath = self:GetBuffIcon("Major Savagery"),
-                buffType = "savagery",
-                isMajor = true
-            })
-            table.insert(slots, {
-                buffName = "Minor Savagery",
-                iconPath = self:GetBuffIcon("Minor Savagery"),
-                buffType = "savagery",
-                isMajor = false
-            })
+    if needsUpdate then
+        -- Throttle UI updates
+        if not self.pendingDebuffUpdate then
+            self.pendingDebuffUpdate = true
+            zo_callLater(function()
+                self.pendingDebuffUpdate = false
+                self:UpdateUI()
+            end, 100)
         end
     end
-
-    return slots
 end
 
 function ShouldIUlt:Cleanup()
@@ -1198,53 +1526,6 @@ function ShouldIUlt:Cleanup()
     if self.bossDebuffData then
         self.bossDebuffData = {}
     end
-end
-
-ShouldIUlt.buffNameCache = {}
-
-
-ShouldIUlt.trackedBuffsCache = nil
-ShouldIUlt.lastSettingsHash = nil
-
-
-function ShouldIUlt:UpdateTimersOnly()
-    local container = BuffTrackerContainer
-    if not container then return end
-
-    local displayBuffs = self:GetDisplayBuffs()
-    local index = 1
-
-    for abilityId, buffInfo in pairs(displayBuffs) do
-        local buffIcon = container:GetNamedChild("BuffIcon" .. index)
-        if buffIcon and not buffIcon:IsHidden() then
-            local timerLabel = buffIcon:GetNamedChild("Timer")
-
-
-            -- Only update timer text
-            if timerLabel and ShouldIUlt.savedVars.showTimer then
-                if buffInfo.isPermanent then
-                    timerLabel:SetText("")
-                else
-                    local remainingTime = buffInfo.endTime - GetGameTimeMilliseconds()
-                    if remainingTime > 0 then
-                        if remainingTime > 60000 then
-                            timerLabel:SetText(string.format("%.1fm", remainingTime / 60000))
-                        else
-                            timerLabel:SetText(string.format("%.1f", remainingTime / 1000))
-                        end
-                    else
-                        timerLabel:SetText("")
-                    end
-                end
-            end
-            index = index + 1
-            if index > 14 then break end
-        end
-    end
-end
-
-function ShouldIUlt:OnUpdate()
-    ShouldIUlt:UpdateUI()
 end
 
 ---=============================================================================

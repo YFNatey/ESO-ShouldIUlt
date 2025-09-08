@@ -31,7 +31,7 @@ ShouldIUlt.defaults = {
     trackAbyssalInk = false,
     staticContainer = false,
     inactiveBuffOpacity = 0.3,
-    timerThreshold = 10.0,
+    timerThreshold = 3.0,
 
     trackWeaponSpellDamage = false,
     trackWeaponSpellCrit = false,
